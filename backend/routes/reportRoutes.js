@@ -1,72 +1,72 @@
-require('dotenv').config();
-
-const express = require('express');
-const multer = require('multer');
-const path = require('path');
-const fs = require('fs');
-const pdf = require('pdf-parse');
-const axios = require('axios');
+const express = require("express");
+const multer = require("multer");
+const fs = require("fs");
+const path = require("path");
+const { analyzeTextWithGeminiWithRetry } = require("../geminiAPI");
+const { io } = require('../index');  // Import Socket.IO instance
 
 const router = express.Router();
 
+// Configure Multer for file uploads
 const storage = multer.diskStorage({
-    destination: path.join(__dirname, '../uploads'), 
-    filename: (req, file, cb) => {
-        cb(null, Date.now() + path.extname(file.originalname)); 
-    }
+  destination: (req, file, cb) => {
+    const uploadDir = path.join(__dirname, "../uploads");  // Use path.join
+    fs.mkdirSync(uploadDir, { recursive: true });  // Ensure the directory exists
+    cb(null, uploadDir);
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
+  }
 });
 
-const upload = multer({ storage });
+const upload = multer({ storage: storage }); // Use configured storage
 
-router.post('/upload', upload.single('file'), async (req, res) => {
+// Helper function to convert a file to text (replace with your actual conversion logic)
+async function convertFileToText(filePath) {
+  try {
+    // REPLACE THIS WITH YOUR ACTUAL FILE-TO-TEXT CONVERSION LOGIC (pdf-parse, OCR, etc.)
+    // This is just a placeholder!
+    const text = fs.readFileSync(filePath, 'utf8');
+    return text;
+
+  } catch (error) {
+    console.error("Error converting file to text:", error);
+    throw new Error("Failed to convert file to text."); // Re-throw for route handling
+  }
+}
+
+// Route to upload report and analyze it
+router.post("/upload", upload.single("file"), async (req, res) => {
+  try {
     if (!req.file) {
-        return res.status(400).json({ message: "No file uploaded" });
+      return res.status(400).json({ error: "No file uploaded" });
     }
 
-    const filePath = path.join(__dirname, '../uploads', req.file.filename);
+    const uploadedFile = req.file; // Access the uploaded file information
+    const filePath = uploadedFile.path; // Get the path to the uploaded file
 
-    try {
-        console.log("Reading file:", filePath);
+    console.log(`File uploaded: ${uploadedFile.originalname} to ${filePath}`); // Log file info
 
-        const dataBuffer = fs.readFileSync(filePath);
-        const pdfData = await pdf(dataBuffer); // Extract text from PDF
+    // 1. Convert the uploaded file to text
+    const fileText = await convertFileToText(filePath); //  Use your conversion function
 
-        console.log("Extracted Text:", pdfData.text);
+    // 2. Analyze the text with Gemini
+    const aiResponseText = await  analyzeTextWithGeminiWithRetry(fileText);
 
-        const HF_API_KEY = process.env.HF_API_KEY;
+    // 3. Emit the AI response to the frontend via Socket.IO
+    io.emit('ai_analysis_result', {  // Use a consistent event name
+      filename: uploadedFile.originalname, // Send the original filename
+      aiResponse: aiResponseText,
+    });
 
-        console.log(HF_API_KEY);
-        
+    // 4. Send a success response to the frontend
+    res.json({ success: true, filename: uploadedFile.originalname }); // Just confirm the upload.
 
-        if (!HF_API_KEY) {
-            throw new Error("Hugging Face API key is missing. Check .env file.");
-        }
-
-        // Send text to BioGPT for medical analysis
-        const bioGptResponse = await axios.post(
-            "https://api-inference.huggingface.co/models/microsoft/BioGPT",
-            { inputs: pdfData.text.substring(0, 500) }, // Send first 500 characters
-            {
-                headers: {
-                    "Authorization": `Bearer ${HF_API_KEY}`,
-                    "Content-Type": "application/json"
-                }
-            }
-        );
-
-        console.log("BioGPT Response:", bioGptResponse.data);
-
-        res.json({
-            message: "File uploaded successfully",
-            filename: req.file.filename,
-            text: pdfData.text,
-            aiAnalysis: bioGptResponse.data // AI-generated medical insights
-        });
-
-    } catch (error) {
-        console.error("Error processing PDF:", error);
-        res.status(500).json({ message: "Error processing PDF", error: error.message });
-    }
+  } catch (error) {
+    console.error("Error uploading/analyzing report:", error);
+    res.status(500).json({ error: error.message }); // Send a meaningful error message
+  }
 });
 
 module.exports = router;

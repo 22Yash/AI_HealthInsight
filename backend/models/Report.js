@@ -1,9 +1,11 @@
 const mongoose = require('mongoose');
 
-const reportSchema = new mongoose.Schema({
-  filename: String,
-  filepath: String,
-  uploadedAt: { type: Date, default: Date.now },
-});
+const ReportSchema = new mongoose.Schema({
+    pdfFilename: { type: String, required: true },
+    textFilename: { type: String, required: true },
+    pdfPath: { type: String, required: true },
+    textPath: { type: String, required: true },
+    extractedText: { type: String, required: true }
+}, { timestamps: true });
 
-module.exports = mongoose.model('Report', reportSchema);
+module.exports = mongoose.model('Report', ReportSchema);
